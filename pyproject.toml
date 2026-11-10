@@ -1,0 +1,19 @@
+[project]
+name = "tts"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tom Jagus", email = "168629725+tom-jagus@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "piper-tts[http]>=1.8.0",
+]
+
+[project.scripts]
+tts = "tts.piper.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
