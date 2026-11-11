@@ -4,6 +4,9 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+from .markdown import MAX_DOCUMENT_LENGTH
 
 
 SERVICE = "tts-local.service"
@@ -60,6 +63,10 @@ def main() -> int:
         "--voice",
         help="Use an installed voice instead of the configured default",
     )
+
+    file_parser = commands.add_parser("file", help="Read a UTF-8 Markdown file")
+    file_parser.add_argument("path", help="Path to the Markdown file")
+    file_parser.add_argument("--voice", help="Use an installed voice")
 
     args = parser.parse_args()
 
@@ -129,10 +136,32 @@ def main() -> int:
             print(body.get("error", f"HTTP {status}"), file=sys.stderr)
             return 1
 
-        payload = {"text": args.text}
+        if args.command == "file":
+            try:
+                path = Path(args.path).expanduser()
+                with path.open("r", encoding="utf-8-sig") as source:
+                    text = source.read(MAX_DOCUMENT_LENGTH + 1)
+                if len(text) > MAX_DOCUMENT_LENGTH:
+                    raise ValueError(f"File exceeds {MAX_DOCUMENT_LENGTH} characters")
+                if not text.strip():
+                    raise ValueError("The file is empty")
+            except (OSError, UnicodeError, ValueError) as error:
+                message = f"Cannot read file: {error}"
+                print(message, file=sys.stderr)
+                try:
+                    status, body = request("/read", {"text": message[:1000]})
+                    if status != 202:
+                        print("Could not queue the spoken error.", file=sys.stderr)
+                except (urllib.error.URLError, TimeoutError, OSError):
+                    print("TTS service is unavailable; cannot speak the error.",
+                          file=sys.stderr)
+                return 1
+            payload = {"text": text, "format": "markdown"}
+        else:
+            payload = {"text": args.text}
 
         if args.voice is not None:
-               payload["voice"] = args.voice
+            payload["voice"] = args.voice
 
         status, body = request("/read", payload)
 
@@ -144,7 +173,12 @@ def main() -> int:
 
             return 0
 
-        print(body.get("error", f"HTTP {status}"), file=sys.stderr)
+        error = body.get("error", f"HTTP {status}")
+        print(error, file=sys.stderr)
+        if args.command == "file":
+            spoken_status, _ = request("/read", {"text": f"Cannot read file: {error}"[:1000]})
+            if spoken_status != 202:
+                print("Could not queue the spoken error.", file=sys.stderr)
         return 1
 
     except (urllib.error.URLError, TimeoutError, OSError):

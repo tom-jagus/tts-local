@@ -1,102 +1,7 @@
-import MarkdownIt from "markdown-it";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const TTS_URL = "http://127.0.0.1:8765/read";
 const REQUEST_TIMEOUT_MS = 3000;
-
-/**
-* Replace fenced code blocks with a short spoken label.
-*
-* Supports backtick and tilde fences, including an unclosed fence. This is
-* intentionally a lightweight Markdown treatment, not a full parser.
-*/
-
-const markdownParser = new MarkdownIt({
-  html: false,
-});
-
-/**
-* Convert Markdown into text suitable for speech.
-*
-* The parser handles Markdown structure; this renderer chooses what should
-* be spoken. Code block contents and link destinations are omitted.
-*/
-function prepareSpeech(markdown: string): string {
-  const tokens = markdownParser.parse(markdown, {});
-  const output: string[] = [];
-
-  for (const token of tokens) {
-    switch (token.type) {
-      case "inline": {
-        const parts: string[] = [];
-
-        for (const child of token.children ?? []) {
-          switch (child.type) {
-            case "text":
-            case "code_inline":
-              parts.push(child.content);
-              break;
-
-            case "softbreak":
-              // A wrapped line within a paragraph is still one sentence.
-              parts.push(" ");
-              break;
-
-            case "hardbreak":
-              parts.push("\n");
-              break;
-
-            case "image":
-              // For images, speak the alt text rather than the image URL.
-              if (child.content) {
-                parts.push(child.content);
-              }
-              break;
-          }
-        }
-
-        output.push(parts.join(""));
-        break;
-      }
-
-      case "fence": {
-        const language = token.info.trim().split(/\s+/)[0];
-        output.push(
-          language ? `\n${language} code block.\n` : "\nCode block.\n",
-        );
-        break;
-      }
-
-      case "code_block":
-        // Indented Markdown code blocks do not have a language label.
-        output.push("\nCode block.\n");
-        break;
-
-      case "paragraph_close":
-      case "heading_close":
-      case "list_item_close":
-      case "blockquote_close":
-      case "tr_close":
-        output.push("\n\n");
-        break;
-
-      case "th_close":
-      case "td_close":
-        output.push(". ");
-        break;
-
-      case "hr":
-        output.push("\n\n");
-        break;
-    }
-  }
-
-  return output
-    .join("")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
 
 export default function (pi: ExtensionAPI) {
   let autoRead = true;
@@ -112,7 +17,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function enqueue(text: string, ctx: any): void {
-    const spokenText = prepareSpeech(text);
+    const spokenText = text.trim();
 
     if (!spokenText) {
       return;
@@ -123,7 +28,7 @@ export default function (pi: ExtensionAPI) {
         const response = await fetch(TTS_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: spokenText }),
+          body: JSON.stringify({ text: spokenText, format: "markdown" }),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 

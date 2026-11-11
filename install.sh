@@ -20,7 +20,7 @@ if [[ "$HOME" == *[[:space:]%]* ]]; then
     exit 1
 fi
 
-for command in uv aplay systemctl pi npm; do
+for command in uv aplay systemctl pi; do
     if ! command -v "$command" >/dev/null 2>&1; then
         printf 'Required command not found: %s\n' "$command" >&2
         exit 1
@@ -33,9 +33,7 @@ if ! systemctl --user show-environment >/dev/null 2>&1; then
 fi
 
 for file in \
-    "$CONNECTOR_FILE" \
-    "$CONNECTOR_DIR/package.json" \
-    "$CONNECTOR_DIR/package-lock.json"
+    "$CONNECTOR_FILE"
 do
     if [[ ! -f "$file" ]]; then
         printf 'Required connector file not found: %s\n' "$file" >&2
@@ -215,21 +213,6 @@ EOF
 fi
 
 systemctl --user daemon-reload
-
-echo "Checking Pi connector dependencies..."
-
-if (
-    cd "$CONNECTOR_DIR"
-    npm ls --all --omit=dev >/dev/null 2>&1
-); then
-    echo "Pi connector dependencies are already installed."
-else
-    echo "Installing Pi connector dependencies from package-lock.json..."
-    (
-        cd "$CONNECTOR_DIR"
-        npm ci
-    )
-fi
 
 # Pi stores personal package paths relative to its settings file.
 if uv run python - "$CONNECTOR_FILE" <<'PY'

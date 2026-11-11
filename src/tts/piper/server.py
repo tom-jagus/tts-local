@@ -9,6 +9,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from .voices import default_voice, voice_path
+from .markdown import MAX_DOCUMENT_LENGTH, markdown_sections
 
 
 HOST = "127.0.0.1"
@@ -16,7 +17,7 @@ PORT = 8765
 
 MAX_QUEUE_SIZE = 20
 MAX_TEXT_LENGTH = 100_000
-MAX_REQUEST_BYTES = 600_100
+MAX_REQUEST_BYTES = 12_000_200
 
 log = logging.getLogger("tts")
 
@@ -24,7 +25,7 @@ log = logging.getLogger("tts")
 class SpeechQueue:
     def __init__(self) -> None:
         self.condition = threading.Condition()
-        self.messages: deque[tuple[str, Path]] = deque()
+        self.messages: deque[tuple[list[str], Path]] = deque()
         self.paused = False
 
         # The current message includes both synthesis and playback.
@@ -33,12 +34,12 @@ class SpeechQueue:
         self.skip_requested = False
         self.process: subprocess.Popen | None = None
 
-    def add(self, text: str, model: Path) -> bool:
+    def add(self, sections: list[str], model: Path) -> bool:
         with self.condition:
             if len(self.messages) >= MAX_QUEUE_SIZE:
                 return False
 
-            self.messages.append((text, model))
+            self.messages.append((sections, model))
             self.condition.notify_all()
             return True
 
@@ -68,6 +69,7 @@ class SpeechQueue:
                 return False
 
             self.skip_requested = True
+            self.condition.notify_all()
 
             if self.process is not None:
                 try:
@@ -141,13 +143,22 @@ class SpeechQueue:
                     lambda: bool(self.messages) and not self.paused
                 )
 
-                text, model = self.messages.popleft()
+                sections, model = self.messages.popleft()
                 self.current = True
                 self.phase = "synthesizing"
                 self.skip_requested = False
 
             try:
-                self.speak(text, model)
+                for text in sections:
+                    with self.condition:
+                        if self.paused:
+                            self.phase = "paused"
+                        self.condition.wait_for(
+                            lambda: not self.paused or self.skip_requested
+                        )
+                        if self.skip_requested:
+                            break
+                    self.speak(text, model)
             except Exception:
                 log.exception("Failed to synthesize or play a message")
             finally:
@@ -225,11 +236,18 @@ class Handler(BaseHTTPRequestHandler):
 
         text = text.strip()
 
-        if len(text) > MAX_TEXT_LENGTH:
-            self.respond(
-                400,
-                {"error": f"Text exceeds {MAX_TEXT_LENGTH} characters"},
-            )
+        format_name = payload.get("format", "text")
+        if format_name not in ("text", "markdown"):
+            self.respond(400, {"error": "Format must be text or markdown"})
+            return
+        limit = MAX_DOCUMENT_LENGTH if format_name == "markdown" else MAX_TEXT_LENGTH
+        if len(text) > limit:
+            self.respond(400, {"error": f"Text exceeds {limit} characters"})
+            return
+
+        sections = markdown_sections(text) if format_name == "markdown" else [text]
+        if not sections:
+            self.respond(400, {"error": "No readable content found"})
             return
 
         requested_voice = payload.get("voice")
@@ -256,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, {"error": str(error)})
             return
 
-        if not speech.add(text, model):
+        if not speech.add(sections, model):
             self.respond(429, {"error": "Speech queue is full"})
             return
 
