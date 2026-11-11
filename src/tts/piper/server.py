@@ -8,6 +8,7 @@ import threading
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from .voices import default_voice, voice_path
 
 
 HOST = "127.0.0.1"
@@ -17,16 +18,13 @@ MAX_QUEUE_SIZE = 20
 MAX_TEXT_LENGTH = 100_000
 MAX_REQUEST_BYTES = 600_100
 
-DEFAULT_VOICE = Path.home() / "src/tts-local/en_US-hfc_female-medium.onnx"
-VOICE_PATH = Path(os.environ.get("TTS_VOICE", DEFAULT_VOICE)).expanduser()
-
 log = logging.getLogger("tts")
 
 
 class SpeechQueue:
     def __init__(self) -> None:
         self.condition = threading.Condition()
-        self.messages: deque[str] = deque()
+        self.messages: deque[tuple[str, Path]] = deque()
         self.paused = False
 
         # The current message includes both synthesis and playback.
@@ -35,12 +33,12 @@ class SpeechQueue:
         self.skip_requested = False
         self.process: subprocess.Popen | None = None
 
-    def add(self, text: str) -> bool:
+    def add(self, text: str, model: Path) -> bool:
         with self.condition:
             if len(self.messages) >= MAX_QUEUE_SIZE:
                 return False
 
-            self.messages.append(text)
+            self.messages.append((text, model))
             self.condition.notify_all()
             return True
 
@@ -104,7 +102,7 @@ class SpeechQueue:
 
         return True
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, model: Path) -> None:
         # Temporary files avoid putting the complete WAV in server memory.
         with tempfile.TemporaryDirectory(prefix="tts-local-") as directory:
             directory_path = Path(directory)
@@ -120,7 +118,7 @@ class SpeechQueue:
                         "-m",
                         "piper",
                         "--model",
-                        str(VOICE_PATH),
+                        str(model),
                         "--output_file",
                         str(audio_path),
                     ],
@@ -143,13 +141,13 @@ class SpeechQueue:
                     lambda: bool(self.messages) and not self.paused
                 )
 
-                text = self.messages.popleft()
+                text, model = self.messages.popleft()
                 self.current = True
                 self.phase = "synthesizing"
                 self.skip_requested = False
 
             try:
-                self.speak(text)
+                self.speak(text, model)
             except Exception:
                 log.exception("Failed to synthesize or play a message")
             finally:
@@ -234,11 +232,40 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
-        if not speech.add(text):
+        requested_voice = payload.get("voice")
+        warning = None
+
+        try:
+            selected_voice = default_voice()
+
+            if requested_voice is not None:
+                try:
+                    model = voice_path(requested_voice)
+                    selected_voice = requested_voice
+                except ValueError:
+                    model = voice_path(selected_voice)
+                    warning = (
+                        f"Voice {requested_voice!r} is invalid or not installed; "
+                        f"using default voice {selected_voice!r}."
+                    )
+            else:
+                model = voice_path(selected_voice)
+
+        except ValueError as error:
+            # The configured default must be valid and installed.
+            self.respond(400, {"error": str(error)})
+            return
+
+        if not speech.add(text, model):
             self.respond(429, {"error": "Speech queue is full"})
             return
 
-        self.respond(202, {"status": "queued"})
+        response = {"status": "queued", "voice": selected_voice}
+
+        if warning:
+            response["warning"] = warning
+
+        self.respond(202, response)
 
     def log_message(self, format: str, *args: object) -> None:
         log.info("%s - %s", self.address_string(), format % args)
@@ -250,14 +277,13 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    if not VOICE_PATH.is_file():
-        raise FileNotFoundError(f"Voice model not found: {VOICE_PATH}")
+    model = voice_path(default_voice())
 
     worker = threading.Thread(target=speech.work, daemon=True)
     worker.start()
 
     with ThreadingHTTPServer((HOST, PORT), Handler) as server:
-        log.info("Using voice: %s", VOICE_PATH)
+        log.info("Default voice: %s", model)
         log.info("Listening on http://%s:%s", HOST, PORT)
         server.serve_forever()
 

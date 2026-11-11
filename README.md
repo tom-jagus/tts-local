@@ -23,8 +23,8 @@ voice and dependencies are installed, synthesis runs locally.
 
 ## Installation
 
-Clone the repository into `~/src/tts-local`. The current installer and default
-voice path expect this location.
+Clone the repository into `~/src/tts-local`. The current installer expects
+this location.
 
 ```bash
 mkdir -p ~/src
@@ -34,11 +34,12 @@ cd tts-local
 ./install.sh
 ```
 
-The installer synchronizes Python dependencies, downloads the default voice if
-needed, installs the `tts` command as an editable uv tool, creates a systemd
-user service, and installs and registers the Pi connector. It does not start
-or enable the service. It leaves an existing `tts` uv tool or service file
-unchanged, so check that they point to this checkout if you already have them.
+The installer synchronizes Python dependencies, prepares the default voice and
+configuration, installs the `tts` command as an editable uv tool, creates a
+systemd user service, and installs and registers the Pi connector. It does not
+start or enable the service. It leaves an existing `tts` uv tool or service
+file unchanged, so check that they point to this checkout if you already have
+them.
 
 The Pi registration and editable tool refer to files in this checkout. Moving
 or deleting the directory will break those references. The installer currently
@@ -111,23 +112,54 @@ not always sound natural.
 
 ## Voice selection
 
-The default voice is `en_US-hfc_female-medium`. The installer downloads its
-`.onnx` model and `.onnx.json` configuration into the repository directory.
-Voice models have their own terms, so check the terms for a voice before using
-it. Piper's [voice documentation](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/VOICES.md)
-explains how to find and download voices.
-
-The service reads the `TTS_VOICE` environment variable as a model path. The
-corresponding `.onnx.json` file must be alongside the model. For example, to
-try another voice in the foreground:
+List installed voices and use a particular voice for one message:
 
 ```bash
-TTS_VOICE=/path/to/voice.onnx tts serve
+tts voices
+tts read --voice en_US-hfc_male-medium "Hello from another voice."
 ```
 
-Stop the user service first, because both instances use the same local port.
-Setting `TTS_VOICE` in a terminal does not automatically configure the systemd
-user service; it must be set in that service's environment separately.
+If a requested voice is invalid or not installed, the service uses the
+configured default and returns a warning. Pi requests do not select a voice,
+so Pi uses the default. A queued message keeps the voice selected when it was
+submitted.
+
+The installer creates `~/.config/tts-local/config.toml` if it does not already
+exist. Set `default_voice` to the name of an installed voice:
+
+```toml
+default_voice = "en_US-hfc_female-medium"
+```
+
+The service reads the configured default when accepting each message. It also
+checks the default when it starts, so an invalid or missing default prevents
+startup. Messages already in the queue retain their selected voices.
+
+Voice models and their matching `.onnx.json` files live in
+`~/.local/share/tts-local/voices/`. The installer prepares
+`en_US-hfc_female-medium`, copying existing repository files when available or
+downloading the voice otherwise. It does not overwrite an existing config or
+voice. If an existing config names a different, unavailable default voice, the
+installer reports the problem rather than changing it.
+
+To download another voice:
+
+```bash
+cd ~/src/tts-local
+uv run python -m piper.download_voices \
+  --download-dir "${XDG_DATA_HOME:-$HOME/.local/share}/tts-local/voices" \
+  en_US-hfc_male-medium
+```
+
+Both the `.onnx` and `.onnx.json` files must be present for a voice to appear
+in `tts voices`. Voice models have their own terms, so check those terms before
+using a voice. Piper's [voice documentation](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/VOICES.md)
+explains how to find voices.
+
+The service uses absolute `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values when
+set, falling back to `~/.config` and `~/.local/share` otherwise. The installer
+checks that the terminal and systemd user manager resolve the same locations.
+If they differ, align their environments before installation.
 
 ## Local HTTP API
 
@@ -141,9 +173,11 @@ curl --fail-with-body \
 ```
 
 A successful request returns HTTP `202` after the message enters the queue.
-The service also provides `GET /status` and `POST /pause`, `/resume`, and
-`/skip`. A full queue returns HTTP `429`; skipping while idle returns HTTP
-`409`.
+An optional `voice` field selects an installed voice; an invalid or missing
+voice falls back to the default with a warning in the response. Omitting the
+field uses the default. The service also provides `GET /status` and
+`POST /pause`, `/resume`, and `/skip`. A full queue returns HTTP `429`;
+skipping while idle returns HTTP `409`.
 
 The endpoint has no authentication. It listens only on localhost, but other
 processes on the computer can submit text. If OBS captures the TTS output,

@@ -51,9 +51,15 @@ def main() -> int:
     commands.add_parser("pause", help="Pause after the current message")
     commands.add_parser("resume", help="Resume queued playback")
     commands.add_parser("skip", help="Skip the current message")
+    commands.add_parser("voices", help="List installed voices")
 
     read = commands.add_parser("read", help="Queue text for playback")
     read.add_argument("text", help="Text to speak")
+
+    read.add_argument(
+        "--voice",
+        help="Use an installed voice instead of the configured default",
+    )
 
     args = parser.parse_args()
 
@@ -67,6 +73,33 @@ def main() -> int:
         from .server import main as serve
 
         serve()
+        return 0
+
+    if args.command == "voices":
+        from .voices import available_voices, default_voice
+
+        try:
+            selected = default_voice()
+            voices = available_voices()
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 1
+
+        if not voices:
+            print("No voices installed.")
+            return 0
+
+        for voice in voices:
+            suffix = " (default)" if voice == selected else ""
+            print(voice + suffix)
+
+        if selected not in voices:
+            print(
+                f"Configured default voice is not installed: {selected}",
+                file=sys.stderr,
+            )
+            return 1
+
         return 0
 
     try:
@@ -96,9 +129,19 @@ def main() -> int:
             print(body.get("error", f"HTTP {status}"), file=sys.stderr)
             return 1
 
-        status, body = request("/read", {"text": args.text})
+        payload = {"text": args.text}
+
+        if args.voice is not None:
+               payload["voice"] = args.voice
+
+        status, body = request("/read", payload)
+
         if status == 202:
             print("Queued.")
+
+            if "warning" in body:
+                print(body["warning"], file=sys.stderr)
+
             return 0
 
         print(body.get("error", f"HTTP {status}"), file=sys.stderr)
