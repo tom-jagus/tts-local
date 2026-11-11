@@ -15,11 +15,11 @@ repository.
 - Linux with a working systemd user session and audio output.
 - [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer.
 - `aplay`, provided by the ALSA utilities package on many distributions.
-- Pi, Node.js and npm for the Pi connector and its Markdown parser.
+- Pi for the Pi connector.
 - Network access for installation and the initial voice download.
 
-The installer requires all of these commands, including Pi and npm. Once the
-voice and dependencies are installed, synthesis runs locally.
+The installer requires Pi as well as the other listed commands. Once the voice
+and dependencies are installed, synthesis runs locally.
 
 ## Installation
 
@@ -68,15 +68,16 @@ control playback:
 | `tts start` | Start the user service. |
 | `tts stop` | Stop the systemd user service, interrupt its playback, and discard its pending messages. |
 | `tts status` | Show whether the queue is paused, the current phase, and the number waiting. |
-| `tts pause` | Finish the current message, then hold the queue. |
+| `tts pause` | Finish the current playback section, then hold the queue. |
 | `tts resume` | Resume queued playback. |
 | `tts skip` | Interrupt the current message. The next message starts unless the queue is paused. |
 | `tts serve` | Run the service in the foreground for debugging. |
 
 The queue is in memory. Stopping or restarting the service discards waiting
 messages. It holds up to 20 waiting messages, in addition to the current
-message. Text is limited to 100,000 characters per request. Long messages can
-take time to synthesize and delay other queued messages.
+message. Plain-text requests are limited to 100,000 characters; Markdown
+requests are limited to 2,000,000 characters. Long messages can take time to
+synthesize and delay other queued messages.
 
 To start the service automatically in future user sessions, run:
 
@@ -85,6 +86,25 @@ systemctl --user enable tts-local.service
 ```
 
 This does not start it immediately. Use `tts start` for the current session.
+
+### Read a Markdown file
+
+Queue a UTF-8 Markdown file, optionally choosing an installed voice:
+
+```bash
+tts file ~/path/to/document.md
+tts file --voice en_US-hfc_male-medium ~/path/to/document.md
+```
+
+The service splits the document into playback sections at headings and splits
+large sections further. The entire document remains one queue item, so other
+messages do not interleave with it. `tts pause` waits for the current section
+to finish; `tts resume` continues the document, and `tts skip` discards the
+rest of it.
+
+For an unreadable file, invalid UTF-8, or an oversized file, the command prints
+an error and attempts to queue a spoken explanation. The explanation cannot
+play if the service is unavailable, and it may wait behind other messages.
 
 ## Pi connector
 
@@ -104,11 +124,11 @@ the service. Use `tts skip` to interrupt the current message, or `tts stop` to
 stop the systemd user service and discard its queue. If you started the service
 in the foreground with `tts serve`, press Ctrl+C in that terminal instead.
 
-The connector parses Markdown before submitting text. It removes formatting
-markers, joins wrapped lines within paragraphs, reads link labels without their
-URLs, and replaces code blocks with a short label such as "Python code block."
-Inline code remains in the spoken text. Tables and other formatted content may
-not always sound natural.
+The connector submits Markdown to the service, which also prepares Markdown
+files for speech. The service removes formatting markers, joins wrapped lines
+within paragraphs, reads link labels without their URLs, and replaces code
+blocks with a short label such as "Python code block." Inline code remains in
+the spoken text. Tables and other formatted content may not sound natural.
 
 ## Voice selection
 
@@ -175,9 +195,10 @@ curl --fail-with-body \
 A successful request returns HTTP `202` after the message enters the queue.
 An optional `voice` field selects an installed voice; an invalid or missing
 voice falls back to the default with a warning in the response. Omitting the
-field uses the default. The service also provides `GET /status` and
-`POST /pause`, `/resume`, and `/skip`. A full queue returns HTTP `429`;
-skipping while idle returns HTTP `409`.
+field uses the default. Add `"format": "markdown"` to prepare Markdown for
+speech; the default format is plain `text`. The service also provides
+`GET /status` and `POST /pause`, `/resume`, and `/skip`. A full queue returns
+HTTP `429`; skipping while idle returns HTTP `409`.
 
 The endpoint has no authentication. It listens only on localhost, but other
 processes on the computer can submit text. If OBS captures the TTS output,
@@ -196,9 +217,8 @@ If the service is running but there is no sound, check that `aplay` can use
 your intended audio output and that the systemd user session has access to it.
 The service generates speech and plays it on the machine running the service.
 
-If Pi cannot find `markdown-it`, check that `npm ci` completed in
-`pi-tts-connector/`, then run `/reload` in Pi. If Pi reports that it cannot
-reach TTS, check `tts status` and the service logs.
+If Pi reports that it cannot reach TTS, check `tts status` and the service
+logs. After updating the Pi connector, run `/reload` in Pi.
 
 For foreground debugging, stop the user service before running `tts serve`.
 Press Ctrl+C to stop the foreground process.
