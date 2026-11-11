@@ -119,16 +119,21 @@ session, and the footer shows `TTS on` or `TTS off`.
 | `/tts on` | Enable automatic reading for subsequent messages. |
 | `/tts off` | Disable automatic reading for subsequent messages. |
 
-Turning automatic reading off does not remove messages already submitted to
-the service. Use `tts skip` to interrupt the current message, or `tts stop` to
-stop the systemd user service and discard its queue. If you started the service
-in the foreground with `tts serve`, press Ctrl+C in that terminal instead.
+Turning automatic reading off prevents new automatic submissions, but does not
+cancel requests already waiting in the connector or messages already submitted
+to the service. Pending connector requests can reach the service after it is
+restarted. Use `tts skip` to interrupt only the current message, or `tts stop`
+to stop the systemd user service and discard its queue. If you started the
+service in the foreground with `tts serve`, press Ctrl+C in that terminal
+instead.
 
 The connector submits Markdown to the service, which also prepares Markdown
 files for speech. The service removes formatting markers, joins wrapped lines
 within paragraphs, reads link labels without their URLs, and replaces code
 blocks with a short label such as "Python code block." Inline code remains in
-the spoken text. Tables and other formatted content may not sound natural.
+the spoken text. Pi messages do not split at headings, although long messages
+are still split into playback sections. Tables and other formatted content may
+not sound natural.
 
 ## Voice selection
 
@@ -162,7 +167,8 @@ downloading the voice otherwise. It does not overwrite an existing config or
 voice. If an existing config names a different, unavailable default voice, the
 installer reports the problem rather than changing it.
 
-To download another voice:
+To download another voice, first ensure `XDG_DATA_HOME` is unset or is an
+absolute path, then run:
 
 ```bash
 cd ~/src/tts-local
@@ -196,9 +202,13 @@ A successful request returns HTTP `202` after the message enters the queue.
 An optional `voice` field selects an installed voice; an invalid or missing
 voice falls back to the default with a warning in the response. Omitting the
 field uses the default. Add `"format": "markdown"` to prepare Markdown for
-speech; the default format is plain `text`. The service also provides
-`GET /status` and `POST /pause`, `/resume`, and `/skip`. A full queue returns
-HTTP `429`; skipping while idle returns HTTP `409`.
+speech; the default format is plain `text`. Markdown requests split playback
+sections at headings by default. Set `"split_headings": false` to avoid those
+splits; long sections can still be split. The field must be a boolean, including
+for plain-text requests, where it has no effect.
+
+The service also provides `GET /status` and `POST /pause`, `/resume`, and
+`/skip`. A full queue returns HTTP `429`; skipping while idle returns HTTP `409`.
 
 The endpoint has no authentication. It listens only on localhost, but other
 processes on the computer can submit text. If OBS captures the TTS output,

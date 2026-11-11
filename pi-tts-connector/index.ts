@@ -28,7 +28,11 @@ export default function (pi: ExtensionAPI) {
         const response = await fetch(TTS_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: spokenText, format: "markdown" }),
+          body: JSON.stringify({
+            text: spokenText,
+            format: "markdown",
+            split_headings: false,
+          }),
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
 

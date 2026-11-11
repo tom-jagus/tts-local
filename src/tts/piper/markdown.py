@@ -21,7 +21,7 @@ def inline_text(tokens) -> str:
     return "".join(parts)
 
 
-def markdown_sections(source: str) -> list[str]:
+def markdown_sections(source: str, split_headings: bool = True) -> list[str]:
     """Keep heading sections together, splitting oversized sections at words."""
     sections = []
     blocks = []
@@ -47,7 +47,8 @@ def markdown_sections(source: str) -> list[str]:
 
     for token in parser.parse(source):
         if token.type == "heading_open":
-            flush()
+            if split_headings:
+                flush()
         elif token.type == "inline":
             blocks.append(inline_text(token.children))
         elif token.type in ("fence", "code_block"):

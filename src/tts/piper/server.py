@@ -245,7 +245,18 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, {"error": f"Text exceeds {limit} characters"})
             return
 
-        sections = markdown_sections(text) if format_name == "markdown" else [text]
+        split_headings = payload.get("split_headings", True)
+
+        if not isinstance(split_headings, bool):
+            self.respond(400, {"error": "split_headings must be a boolean"})
+            return
+
+        sections = (
+            markdown_sections(text, split_headings=split_headings)
+            if format_name == "markdown"
+            else [text]
+        )
+
         if not sections:
             self.respond(400, {"error": "No readable content found"})
             return
