@@ -8,3 +8,11 @@ wheels/
 
 # Virtual environments
 .venv
+
+# JavaScript dependencies
+node_modules/
+
+# Downloaded Piper voices and generated audio
+*.onnx
+*.onnx.json
+*.wav

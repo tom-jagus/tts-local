@@ -48,6 +48,9 @@ def main() -> int:
     commands.add_parser("stop", help="Stop the service and clear the queue")
     commands.add_parser("status", help="Check the service and queue")
     commands.add_parser("serve", help="Run the service in the foreground")
+    commands.add_parser("pause", help="Pause after the current message")
+    commands.add_parser("resume", help="Resume queued playback")
+    commands.add_parser("skip", help="Skip the current message")
 
     read = commands.add_parser("read", help="Queue text for playback")
     read.add_argument("text", help="Text to speak")
@@ -69,14 +72,28 @@ def main() -> int:
     try:
         if args.command == "status":
             status, body = request("/status")
+
             if status == 200 and body.get("service") == "tts-local":
+                queue_state = "paused" if body["paused"] else "active"
                 print(
-                    f"Running; {body['queued']} waiting "
+                    f"Running; queue {queue_state}; "
+                    f"phase: {body['phase']}; "
+                    f"{body['queued']} waiting "
                     f"(capacity {body['queue_capacity']})."
                 )
                 return 0
 
             print("Unexpected response from local server.", file=sys.stderr)
+            return 1
+
+        if args.command in ("pause", "resume", "skip"):
+            status, body = request(f"/{args.command}", {})
+
+            if status == 200:
+                print(body["status"].capitalize() + ".")
+                return 0
+
+            print(body.get("error", f"HTTP {status}"), file=sys.stderr)
             return 1
 
         status, body = request("/read", {"text": args.text})
