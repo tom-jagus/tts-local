@@ -4,7 +4,7 @@ import textwrap
 
 from markdown_it import MarkdownIt
 
-SECTION_LIMIT = 4000
+SECTION_LIMIT = 1000
 MAX_DOCUMENT_LENGTH = 2_000_000
 parser = MarkdownIt("commonmark", {"html": False}).enable("table")
 
@@ -19,6 +19,24 @@ def inline_text(tokens) -> str:
         elif token.type == "image":
             parts.append(inline_text(token.children) or token.content)
     return "".join(parts)
+
+
+def text_sections(text: str) -> list[str]:
+    """Split plain text at whitespace, omitting whitespace-only sections."""
+    sections = []
+    while len(text) > SECTION_LIMIT:
+        boundary = next(
+            (index + 1 for index in range(SECTION_LIMIT - 1, -1, -1)
+             if text[index].isspace()),
+            SECTION_LIMIT,
+        )
+        section = text[:boundary]
+        if section.strip():
+            sections.append(section)
+        text = text[boundary:]
+    if text.strip():
+        sections.append(text)
+    return sections
 
 
 def markdown_sections(source: str, split_headings: bool = True) -> list[str]:

@@ -72,6 +72,13 @@ def inference_threads() -> int:
     return value
 
 
+def persistent_worker() -> bool:
+    value = read_config().get("persistent_worker", True)
+    if not isinstance(value, bool):
+        raise ValueError("persistent_worker must be a boolean")
+    return value
+
+
 def voice_path(name: object) -> Path:
     name = validate_voice_name(name)
     model = voices_directory() / f"{name}.onnx"

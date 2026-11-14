@@ -76,8 +76,9 @@ control playback:
 The queue is in memory. Stopping or restarting the service discards waiting
 messages. It holds up to 20 waiting messages, in addition to the current
 message. Plain-text requests are limited to 100,000 characters; Markdown
-requests are limited to 2,000,000 characters. Long messages can take time to
-synthesize and delay other queued messages.
+requests are limited to 2,000,000 characters. Both formats are split into
+playback sections of at most 1,000 characters. Long messages can still take
+time to synthesize and delay other queued messages.
 
 To start the service automatically in future user sessions, run:
 
@@ -196,6 +197,23 @@ change. Stopping or restarting the service interrupts playback and discards
 its queue. Fewer inference threads can leave more CPU capacity for other
 applications, but synthesis may take longer. This setting does not limit all
 CPU activity in the Piper process.
+
+### Persistent message worker
+
+By default, the service loads the selected Piper voice once per queued message
+and keeps it loaded until that message finishes or is skipped. This avoids
+reloading the model between sections, but keeps its memory in use during
+playback and while the queue is paused. To use a separate Piper process for
+each section instead, add this setting to the same configuration file:
+
+```toml
+persistent_worker = false
+```
+
+The setting must be a boolean and is read when the service starts. Restarting
+the service applies it but interrupts playback and discards the queue. The
+service synthesizes each section after the preceding section has played, so
+there can still be a pause between sections.
 
 The service uses absolute `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values when
 set, falling back to `~/.config` and `~/.local/share` otherwise. The installer

@@ -5,8 +5,7 @@ import sys
 import onnxruntime
 
 
-def main() -> None:
-    threads = int(sys.argv.pop(1))
+def configure_inference(threads: int) -> None:
     original_session = onnxruntime.InferenceSession
 
     def configured_session(*args, **kwargs):
@@ -19,6 +18,11 @@ def main() -> None:
     # This process runs only Piper. Its public loader does not expose session
     # options, so supply them at the runtime boundary before loading the model.
     onnxruntime.InferenceSession = configured_session
+
+
+def main() -> None:
+    threads = int(sys.argv.pop(1))
+    configure_inference(threads)
     from piper.__main__ import main as piper_main
 
     piper_main()

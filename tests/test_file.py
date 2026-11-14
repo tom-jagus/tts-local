@@ -1,3 +1,5 @@
+import io
+import json
 import tempfile
 import threading
 import time
@@ -5,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tts.piper import cli, synthesize, voices
-from tts.piper.markdown import markdown_sections, SECTION_LIMIT
+from tts.piper import cli, server, synthesize, voices
+from tts.piper.markdown import markdown_sections, text_sections, SECTION_LIMIT
 from tts.piper.server import SpeechQueue
 
 
@@ -24,6 +26,39 @@ class InferenceThreadTests(unittest.TestCase):
             ):
                 with self.assertRaises(ValueError):
                     voices.inference_threads()
+
+    def test_persistent_worker_configuration(self):
+        with patch.object(voices, 'read_config', return_value={}):
+            self.assertTrue(voices.persistent_worker())
+        with patch.object(voices, 'read_config', return_value={'persistent_worker': False}):
+            self.assertFalse(voices.persistent_worker())
+        with patch.object(voices, 'read_config', return_value={'persistent_worker': 'false'}):
+            with self.assertRaises(ValueError):
+                voices.persistent_worker()
+
+    def test_persistent_worker_reused_and_closed(self):
+        speech = SpeechQueue(persistent=True)
+        worker = unittest.mock.Mock()
+        worker.stdout.readline.side_effect = ['{"ok": true}\n', '{"ok": true}\n']
+        worker.poll.return_value = None
+        with patch.object(server.subprocess, 'Popen', return_value=worker) as popen:
+            self.assertTrue(speech.synthesize_section('first', Path('voice'), Path('one')))
+            self.assertTrue(speech.synthesize_section('second', Path('voice'), Path('two')))
+            self.assertEqual(popen.call_count, 1)
+            speech.close_worker()
+        self.assertEqual(worker.stdin.write.call_count, 2)
+        worker.terminate.assert_called_once()
+        worker.wait.assert_called_once()
+        self.assertIsNone(speech.worker)
+
+    def test_skip_terminates_worker_and_playback(self):
+        speech = SpeechQueue(persistent=True)
+        speech.current = True
+        speech.process = unittest.mock.Mock()
+        speech.worker = unittest.mock.Mock()
+        self.assertTrue(speech.skip())
+        speech.process.terminate.assert_called_once()
+        speech.worker.terminate.assert_called_once()
 
     def test_synthesis_worker_configures_session(self):
         import onnxruntime
@@ -64,6 +99,37 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn('One', sections[0])
         self.assertNotIn('Two', sections[0])
         self.assertTrue(all(len(s) <= SECTION_LIMIT for s in sections))
+
+    def test_plain_text_sections_preserve_content_and_bound_length(self):
+        text = ('A sentence with **literal** text. ' * 90) + ('x' * 1500)
+        sections = text_sections(text)
+        self.assertGreater(len(sections), 1)
+        self.assertEqual(''.join(sections), text)
+        self.assertTrue(all(len(section) <= 1000 for section in sections))
+
+    def test_plain_text_skips_whitespace_only_sections(self):
+        sections = text_sections('first' + ' ' * 3000 + 'last')
+        self.assertTrue(all(section.strip() for section in sections))
+        self.assertEqual(''.join(sections).split(), ['first', 'last'])
+
+    def test_plain_text_request_queues_one_item_with_bounded_sections(self):
+        text = 'word ' * 500
+        body = json.dumps({'text': text}).encode()
+        handler = object.__new__(server.Handler)
+        handler.path = '/read'
+        handler.headers = {'Content-Length': str(len(body))}
+        handler.rfile = io.BytesIO(body)
+        handler.respond = unittest.mock.Mock()
+        with patch.object(server, 'default_voice', return_value='voice'), \
+             patch.object(server, 'voice_path', return_value=Path('voice')), \
+             patch.object(server.speech, 'add', return_value=True) as add:
+            handler.do_POST()
+        sections, model = add.call_args.args
+        self.assertEqual(''.join(sections), text.strip())
+        self.assertGreater(len(sections), 1)
+        self.assertTrue(all(len(section) <= 1000 for section in sections))
+        self.assertEqual(model, Path('voice'))
+        handler.respond.assert_called_once_with(202, {'status': 'queued', 'voice': 'voice'})
 
     def test_file_error_is_spoken(self):
         with patch('sys.argv', ['tts', 'file', '/nonexistent/tts-test.md']), patch.object(cli, 'request', return_value=(202, {})) as request:

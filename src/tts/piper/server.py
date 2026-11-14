@@ -8,8 +8,8 @@ import threading
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from .voices import default_voice, inference_threads, voice_path
-from .markdown import MAX_DOCUMENT_LENGTH, markdown_sections
+from .voices import default_voice, inference_threads, persistent_worker, voice_path
+from .markdown import MAX_DOCUMENT_LENGTH, markdown_sections, text_sections
 
 
 HOST = "127.0.0.1"
@@ -23,8 +23,9 @@ log = logging.getLogger("tts")
 
 
 class SpeechQueue:
-    def __init__(self, threads: int = 2) -> None:
+    def __init__(self, threads: int = 2, persistent: bool = False) -> None:
         self.threads = threads
+        self.persistent = persistent
         self.condition = threading.Condition()
         self.messages: deque[tuple[list[str], Path]] = deque()
         self.paused = False
@@ -34,6 +35,7 @@ class SpeechQueue:
         self.phase = "idle"
         self.skip_requested = False
         self.process: subprocess.Popen | None = None
+        self.worker: subprocess.Popen | None = None
 
     def add(self, sections: list[str], model: Path) -> bool:
         with self.condition:
@@ -72,12 +74,12 @@ class SpeechQueue:
             self.skip_requested = True
             self.condition.notify_all()
 
-            if self.process is not None:
-                try:
-                    self.process.terminate()
-                except ProcessLookupError:
-                    # It finished between our check and terminate().
-                    pass
+            for process in (self.process, self.worker):
+                if process is not None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
 
             return True
 
@@ -114,21 +116,24 @@ class SpeechQueue:
 
             text_path.write_text(text, encoding="utf-8")
 
-            with text_path.open("rb") as text_file:
-                synthesized = self.run_process(
-                    [
-                        sys.executable,
-                        "-m",
-                        "tts.piper.synthesize",
-                        str(self.threads),
-                        "--model",
-                        str(model),
-                        "--output_file",
-                        str(audio_path),
-                    ],
-                    "synthesizing",
-                    stdin=text_file,
-                )
+            if self.persistent:
+                synthesized = self.synthesize_section(text, model, audio_path)
+            else:
+                with text_path.open("rb") as text_file:
+                    synthesized = self.run_process(
+                        [
+                            sys.executable,
+                            "-m",
+                            "tts.piper.synthesize",
+                            str(self.threads),
+                            "--model",
+                            str(model),
+                            "--output_file",
+                            str(audio_path),
+                        ],
+                        "synthesizing",
+                        stdin=text_file,
+                    )
 
             if not synthesized:
                 return
@@ -137,6 +142,54 @@ class SpeechQueue:
                 ["aplay", "-q", str(audio_path)],
                 "playing",
             )
+
+    def synthesize_section(self, text: str, model: Path, output: Path) -> bool:
+        with self.condition:
+            if self.skip_requested:
+                return False
+            self.phase = "synthesizing"
+            if self.worker is None:
+                self.worker = subprocess.Popen(
+                    [sys.executable, "-m", "tts.piper.persistent",
+                     str(self.threads), str(model)],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    text=True, encoding="utf-8", bufsize=1,
+                )
+            worker = self.worker
+
+        try:
+            worker.stdin.write(json.dumps({"text": text, "output": str(output)}) + "\n")
+            worker.stdin.flush()
+            response = worker.stdout.readline()
+        except (BrokenPipeError, OSError):
+            with self.condition:
+                if self.skip_requested:
+                    return False
+            raise
+        with self.condition:
+            if self.skip_requested:
+                return False
+        if not response or json.loads(response) != {"ok": True}:
+            raise RuntimeError("Piper worker failed to synthesize a section")
+        return True
+
+    def close_worker(self) -> None:
+        with self.condition:
+            worker = self.worker
+            self.worker = None
+        if worker is not None:
+            if worker.poll() is None:
+                try:
+                    worker.terminate()
+                except ProcessLookupError:
+                    pass
+            try:
+                worker.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                worker.kill()
+                worker.wait()
+            worker.stdin.close()
+            worker.stdout.close()
 
     def work(self) -> None:
         while True:
@@ -164,6 +217,7 @@ class SpeechQueue:
             except Exception:
                 log.exception("Failed to synthesize or play a message")
             finally:
+                self.close_worker()
                 with self.condition:
                     self.current = False
                     self.phase = "idle"
@@ -256,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
         sections = (
             markdown_sections(text, split_headings=split_headings)
             if format_name == "markdown"
-            else [text]
+            else text_sections(text)
         )
 
         if not sections:
@@ -310,6 +364,7 @@ def main() -> None:
 
     model = voice_path(default_voice())
     speech.threads = inference_threads()
+    speech.persistent = persistent_worker()
 
     worker = threading.Thread(target=speech.work, daemon=True)
     worker.start()
@@ -317,6 +372,7 @@ def main() -> None:
     with ThreadingHTTPServer((HOST, PORT), Handler) as server:
         log.info("Default voice: %s", model)
         log.info("Piper inference threads: %d", speech.threads)
+        log.info("Persistent message worker: %s", speech.persistent)
         log.info("Listening on http://%s:%s", HOST, PORT)
         server.serve_forever()
 

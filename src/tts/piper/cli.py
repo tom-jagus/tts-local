@@ -51,7 +51,7 @@ def main() -> int:
     commands.add_parser("stop", help="Stop the service and clear the queue")
     commands.add_parser("status", help="Check the service and queue")
     commands.add_parser("serve", help="Run the service in the foreground")
-    commands.add_parser("pause", help="Pause after the current message")
+    commands.add_parser("pause", help="Pause after the current playback section")
     commands.add_parser("resume", help="Resume queued playback")
     commands.add_parser("skip", help="Skip the current message")
     commands.add_parser("voices", help="List installed voices")
