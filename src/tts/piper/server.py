@@ -8,7 +8,7 @@ import threading
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from .voices import default_voice, voice_path
+from .voices import default_voice, inference_threads, voice_path
 from .markdown import MAX_DOCUMENT_LENGTH, markdown_sections
 
 
@@ -23,7 +23,8 @@ log = logging.getLogger("tts")
 
 
 class SpeechQueue:
-    def __init__(self) -> None:
+    def __init__(self, threads: int = 2) -> None:
+        self.threads = threads
         self.condition = threading.Condition()
         self.messages: deque[tuple[list[str], Path]] = deque()
         self.paused = False
@@ -118,7 +119,8 @@ class SpeechQueue:
                     [
                         sys.executable,
                         "-m",
-                        "piper",
+                        "tts.piper.synthesize",
+                        str(self.threads),
                         "--model",
                         str(model),
                         "--output_file",
@@ -307,12 +309,14 @@ def main() -> None:
     )
 
     model = voice_path(default_voice())
+    speech.threads = inference_threads()
 
     worker = threading.Thread(target=speech.work, daemon=True)
     worker.start()
 
     with ThreadingHTTPServer((HOST, PORT), Handler) as server:
         log.info("Default voice: %s", model)
+        log.info("Piper inference threads: %d", speech.threads)
         log.info("Listening on http://%s:%s", HOST, PORT)
         server.serve_forever()
 

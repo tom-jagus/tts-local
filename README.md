@@ -182,6 +182,21 @@ in `tts voices`. Voice models have their own terms, so check those terms before
 using a voice. Piper's [voice documentation](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/VOICES.md)
 explains how to find voices.
 
+### Inference threads
+
+Piper uses two ONNX inference threads by default. To choose a different count,
+add `inference_threads` to `~/.config/tts-local/config.toml`:
+
+```toml
+inference_threads = 1
+```
+
+The value must be an integer between 1 and 64. Restart the service to apply a
+change. Stopping or restarting the service interrupts playback and discards
+its queue. Fewer inference threads can leave more CPU capacity for other
+applications, but synthesis may take longer. This setting does not limit all
+CPU activity in the Piper process.
+
 The service uses absolute `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values when
 set, falling back to `~/.config` and `~/.local/share` otherwise. The installer
 checks that the terminal and systemd user manager resolve the same locations.

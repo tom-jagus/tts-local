@@ -48,19 +48,28 @@ def validate_voice_name(name: object) -> str:
     return name
 
 
-def default_voice() -> str:
+def read_config() -> dict:
     path = config_file()
 
     if not path.exists():
-        return DEFAULT_VOICE
+        return {}
 
     try:
         with path.open("rb") as config:
-            data = tomllib.load(config)
+            return tomllib.load(config)
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"Cannot read configuration {path}: {error}") from error
 
-    return validate_voice_name(data.get("default_voice", DEFAULT_VOICE))
+
+def default_voice() -> str:
+    return validate_voice_name(read_config().get("default_voice", DEFAULT_VOICE))
+
+
+def inference_threads() -> int:
+    value = read_config().get("inference_threads", 2)
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValueError("inference_threads must be an integer between 1 and 64")
+    return value
 
 
 def voice_path(name: object) -> Path:

@@ -5,9 +5,49 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tts.piper import cli
+from tts.piper import cli, synthesize, voices
 from tts.piper.markdown import markdown_sections, SECTION_LIMIT
 from tts.piper.server import SpeechQueue
+
+
+class InferenceThreadTests(unittest.TestCase):
+    def test_default_and_configured_threads(self):
+        with patch.object(voices, 'read_config', return_value={}):
+            self.assertEqual(voices.inference_threads(), 2)
+        with patch.object(voices, 'read_config', return_value={'inference_threads': 1}):
+            self.assertEqual(voices.inference_threads(), 1)
+
+    def test_invalid_threads(self):
+        for value in (True, 0, -1, 65, 1.5, '2'):
+            with self.subTest(value=value), patch.object(
+                voices, 'read_config', return_value={'inference_threads': value}
+            ):
+                with self.assertRaises(ValueError):
+                    voices.inference_threads()
+
+    def test_synthesis_worker_configures_session(self):
+        import onnxruntime
+        import piper.__main__ as piper_cli
+
+        with patch('sys.argv', ['worker', '2', '--model', 'voice']), \
+             patch.object(onnxruntime, 'InferenceSession') as session, \
+             patch.object(piper_cli, 'main') as main:
+            def load():
+                onnxruntime.InferenceSession('voice', sess_options=onnxruntime.SessionOptions())
+            main.side_effect = load
+            synthesize.main()
+            options = session.call_args.kwargs['sess_options']
+            self.assertEqual(options.intra_op_num_threads, 2)
+            self.assertEqual(options.inter_op_num_threads, 1)
+            self.assertEqual(__import__('sys').argv, ['worker', '--model', 'voice'])
+
+    def test_queue_passes_thread_count_to_worker(self):
+        speech = SpeechQueue(threads=3)
+        with patch.object(speech, 'run_process', return_value=True) as run:
+            speech.speak('hello', Path('voice.onnx'))
+        command = run.call_args_list[0].args[0]
+        self.assertEqual(command[1:4], ['-m', 'tts.piper.synthesize', '3'])
+        self.assertEqual(run.call_args_list[1].args[1], 'playing')
 
 
 class MarkdownTests(unittest.TestCase):
